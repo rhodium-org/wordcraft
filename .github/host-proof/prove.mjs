@@ -16,7 +16,7 @@ const LOG = `<script>
 window.__log = [];
 {
   const c = document.getElementById('wordcraft_canvas');
-  for (const k of ['ready', 'save', 'dirty', 'failed', 'open-request']) c.addEventListener('wordcraft:' + k, (e) => {
+  for (const k of ['ready', 'save', 'dirty', 'failed', 'open-request', 'document']) c.addEventListener('wordcraft:' + k, (e) => {
     const d = e.detail || {};
     window.__log.push({ kind: k, ...Object.fromEntries(Object.entries(d).filter(([n]) => n !== 'bytes')), bytes: d.bytes ? d.bytes.byteLength : undefined, at: performance.now() });
   });
@@ -235,6 +235,19 @@ try {
   await pause(300);
   const off = await run('file.autosave', { value: true });
   check('the host can take AutoSave back', off.err !== undefined, off);
+
+  // ── The document shown ───────────────────────────────────────────────────────────────
+  t = await now();
+  const reportId = (await page.evaluate(() => window.__log.filter((e) => e.kind === 'document').at(-1)))?.id;
+  await run('file.new');
+  await pause(500);
+  const made = (await since(t)).filter((e) => e.kind === 'document');
+  check('wordcraft:document tells the host of a new document (no file name yet)', made.length >= 1 && made.at(-1).open === true && made.at(-1).name === undefined && made.at(-1).id !== reportId, { made, reportId });
+  t = await now();
+  await run('view.switchWindows', { id: Number(reportId) });
+  await pause(500);
+  const back = (await since(t)).filter((e) => e.kind === 'document');
+  check('wordcraft:document tells the host when Switch Windows shows the first again', back.length >= 1 && back.at(-1).id === reportId && back.at(-1).name === 'Report.docx' && back.at(-1).documents?.includes(made.at(-1).id), { back, reportId });
 
   // ── Combine from the host's bytes ────────────────────────────────────────────────────
   const data = Buffer.from(docxOf(THEIRS)).toString('base64');
