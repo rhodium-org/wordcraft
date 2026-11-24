@@ -55,6 +55,18 @@ const check = (name, ok, evidence) => {
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 900 });
+  // Every time the app asks the browser for a file: a file input clicked or put on the page.
+  await page.evaluateOnNewDocument(() => {
+    window.__filePickers = 0;
+    const click = HTMLInputElement.prototype.click;
+    HTMLInputElement.prototype.click = function () {
+      if (this.type === 'file') window.__filePickers += 1;
+      return click.call(this);
+    };
+    new MutationObserver((records) => {
+      for (const r of records) for (const n of r.addedNodes) if (n instanceof Element && (n.matches('input[type=file]') || n.querySelector('input[type=file]'))) window.__filePickers += 1;
+    }).observe(document, { childList: true, subtree: true });
+  });
   await page.goto(`http://127.0.0.1:${server.address().port}/host.html`);
   await page.waitForFunction(() => window.__log.some((e) => e.kind === 'ready') && typeof window.wordcraft === 'object', { timeout: 180_000 });
 
@@ -93,8 +105,8 @@ try {
   await run('ui.backstage', { value: false });
   await run('ui.openFileDialog');
   await pause(800);
-  const owned = await page.evaluate(() => ({ rfdInput: document.getElementById('rfd-input') !== null }));
-  check('a host with open places owns Open: no browser picker is asked for', !owned.rfdInput, owned);
+  const owned = await page.evaluate(() => ({ filePickers: window.__filePickers }));
+  check('a host with open places owns Open: no browser picker is asked for', owned.filePickers === 0, owned);
   await page.screenshot({ path: join(OUT, '1-backstage-open-places.png') });
   await run('ui.backstage', { value: false });
 
@@ -147,7 +159,9 @@ try {
   await send('save-failed', { id: id1, message: 'the branch has moved on' });
   await pause(800);
   log = await since(t);
-  check('wordcraft:save-failed puts the unsaved state back', log.some((e) => e.kind === 'dirty' && e.dirty === true), log);
+  // The host never heard "clean", so it hears nothing new: the document is simply still unsaved.
+  const afterFailure = await run('file.close');
+  check('wordcraft:save-failed leaves the document unsaved (the host never hears clean; Close is still refused)', !log.some((e) => e.kind === 'dirty' && e.dirty === false) && afterFailure.err !== undefined, { log, afterFailure });
   await pause(500);
   await page.screenshot({ path: join(OUT, '4-save-failed-message.png') });
 
@@ -179,12 +193,18 @@ try {
   await run('ui.backstage', { value: true, page: 'open' });
   await pause(800);
   t = await now();
-  // The first Recent row on the Open page at this viewport (1400x900), as this release draws it.
-  const row = JSON.parse(process.env.RECENT_ROW ?? '[318,245]');
+  // The Recent row is found, not assumed: down the Open page's column, the first click that asks
+  // the host for a document by key is the row (the place buttons above it ask without a key; the
+  // list's Clear all sits below it). Fonts and a hidden Browse… move it from build to build.
+  const row = [318, 0];
   if (row) {
-    await page.mouse.click(row[0], row[1]);
-    await pause(800);
-    const reopen = (await since(t)).filter((e) => e.kind === 'open-request');
+    let reopen = [];
+    for (let y = 100; y <= 400 && reopen.length === 0; y += 12) {
+      await page.mouse.click(row[0], y);
+      await pause(250);
+      reopen = (await since(t)).filter((e) => e.kind === 'open-request' && e.key !== undefined);
+      await run('ui.backstage', { value: true, page: 'open' });
+    }
     check('a Recent document from a place reopens through wordcraft:open-request {place, key}', reopen.length === 1 && reopen[0].key === 'acme/papers@main:docs/Report.docx', reopen);
     await page.evaluate((bytes) => window.send('open', { name: 'Report.docx', bytes: new Uint8Array(bytes).buffer }), Array.from(docx));
     await send('document-place', { place: 'github', key: 'acme/papers@main:docs/Report.docx', label: 'acme/papers · main · docs/Report.docx' });
