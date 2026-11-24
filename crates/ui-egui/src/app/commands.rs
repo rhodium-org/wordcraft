@@ -186,9 +186,11 @@ impl WordApp {
             }
             if marked_saved {
                 self.session.dirty = false;
-                // The host page keeps the file under this name now, as a desktop save would.
+                // The host page keeps the file under this name now, as a desktop save would, and
+                // AutoSave may keep writing there when the host writes in place.
                 if self.services.host_save.is_some() {
                     self.session.path = Some(std::path::PathBuf::from(&name));
+                    self.autosave_path = self.session.path.clone();
                 }
             }
             // The browser's picker writes the file later (#1315): until it says how that went,
@@ -814,6 +816,7 @@ impl WordApp {
                 if self.ui.recent.len() == before {
                     return Some(Err(format!("`{path}` is not on the recent list")));
                 }
+                self.ui.recent_places.remove(path);
                 let saved = self.save_prefs_now();
                 if !matches!(saved, Some(Err(_))) {
                     let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.to_string());
@@ -823,10 +826,72 @@ impl WordApp {
                 add_saved(&mut r, saved);
                 r
             }
+            "ui.hostPlaces" => {
+                // Web, hosted: the places the host page declared, and where the shown document
+                // lives in one, if the host said ([`crate::host_places`]).
+                let Some(places) = self.services.host_places.clone() else {
+                    return Some(Ok(json!({"places": [], "document": null})));
+                };
+                let document = if self.has_document() { places.document(self.session.document_id()) } else { None };
+                json!({"places": places.list(), "document": document})
+            }
+            "ui.hostOpen" => {
+                // Backstage Open: a host's place (`place`), or a Recent document from one (`key`).
+                // The host asks its own questions and sends the document back as any host file.
+                let Some(place) = p.get("place").and_then(Value::as_str) else {
+                    return Some(Err("`place` must name a place the host page offers".into()));
+                };
+                let key = match p.get("key") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(k)) => Some(k.as_str()),
+                    Some(_) => return Some(Err("`key` must be a string".into())),
+                };
+                let (Some(places), Some(open)) = (self.services.host_places.as_ref(), self.services.host_open.as_ref()) else {
+                    return Some(Err("no host page keeps documents here".into()));
+                };
+                let Some(found) = places.get(place) else {
+                    return Some(Err(format!("the host page offers no place `{place}`")));
+                };
+                // A Recent entry names its place even when the host no longer lists it for Open.
+                if !found.open && key.is_none() {
+                    return Some(Err(format!("{} does not open documents", found.label)));
+                }
+                if let Err(e) = open(place, key) {
+                    let msg = i18n::fmt(tl!("Couldn't ask {place} for the document: {error}"), &[("place", &found.label), ("error", &e)]);
+                    self.status(msg.clone());
+                    return Some(Err(msg));
+                }
+                self.status(i18n::fmt(tl!("Opening from {place}…"), &[("place", &found.label)]));
+                json!({"asked": place})
+            }
+            "ui.hostSaveAs" => {
+                // Backstage Save As: save through the host page into one of its places; the host
+                // asks where in it.
+                let Some(place) = p.get("place").and_then(Value::as_str) else {
+                    return Some(Err("`place` must name a place the host page offers".into()));
+                };
+                let Some(places) = self.services.host_places.clone() else {
+                    return Some(Err("no host page keeps documents here".into()));
+                };
+                match places.get(place) {
+                    Some(found) if found.save_as => {}
+                    Some(found) => return Some(Err(format!("{} does not take saves", found.label))),
+                    None => return Some(Err(format!("the host page offers no place `{place}`"))),
+                }
+                places.set_save_place(Some(place.to_string()));
+                let r = self.execute("file.saveAs", json!({}));
+                // Claimed by the bridge when the save went out; never left for a later save.
+                places.set_save_place(None);
+                if r.is_ok() {
+                    self.ui.backstage = false;
+                }
+                return Some(r);
+            }
             "ui.recentClear" => {
                 // Clear the whole list, as Word's registry clear does for recent documents (#2716).
                 let removed = self.ui.recent.len();
                 self.ui.recent.clear();
+                self.ui.recent_places.clear();
                 let saved = self.save_prefs_now();
                 if !matches!(saved, Some(Err(_))) {
                     self.status(i18n::fmt(tl!("Removed {count} documents from the recent list"), &[("count", &removed.to_string())]));
@@ -1121,6 +1186,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.startScreen"
             | "ui.recentRemove"
             | "ui.recentClear"
+            | "ui.hostPlaces"
+            | "ui.hostOpen"
             | "ui.displayServer"
             | "ui.statusCount"
             | "ui.checkForUpdates"

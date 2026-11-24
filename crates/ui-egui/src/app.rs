@@ -326,6 +326,7 @@ impl WordApp {
         // draws, for itself.
         self.window_work(ctx);
         self.drain_inbox();
+        self.settle_host_places();
         self.drain_pasted();
         self.watch_fonts(ctx);
         // A script, an agent or a later result may have made another document the active one.

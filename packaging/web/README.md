@@ -159,6 +159,21 @@ The messages and both transports are the shared contract of [`craft-web-host`](h
 - **Files from the host are untrusted input.** An opened file goes through the same reading as one picked with File ▸ Open or dropped on the window, with the same format limits; before it is copied into the app's memory, its size is checked against the host open limit (512 MiB) and a larger file is refused, and a name is cut to 255 characters.
 - **The event and message names are the interface.** `wordcraft:ready`, `wordcraft:open`, `wordcraft:save`, `wordcraft:dirty` and `wordcraft:failed`, and the fields they carry (the same as the `?host=parent` messages), stay stable; changing one is a breaking change.
 
+### Places, AutoSave and confirmed saves
+
+Beyond the messages above, a host (either mode) may declare more. Each is optional: a host that
+sends none sees no change.
+
+| Message | Direction | Fields |
+|---|---|---|
+| `wordcraft:places` | page → app | `places: [{ id, label, icon?, open, saveAs }]`. Backstage Open lists each place with `open: true` and Save As each with `saveAs: true`, beside Browse…. Sending it again replaces the list; an empty list removes them. `icon` (an image data URI) is kept but not drawn yet. |
+| `wordcraft:open-request` | app → page | `place`, `key?`. The person chose a place in Open, or a Recent document that lives in one (`key`, as the page named it). Ask your own questions and answer with `wordcraft:open`; nothing needs answering on a cancel. |
+| `wordcraft:document-place` | page → app | `place`, `key?`, `label?`, sent after an open or a save: where the document lives. File › Info shows `label`, and its Recent entry reopens through `open-request` with `key`. |
+| `wordcraft:save` | app → page | as above, plus `place` for a Save As into one of your places. Without `place` the page decides, as before. |
+| `wordcraft:autosave` | page → app | `available`: `true` when the page writes Save back where the document came from. WordCraft's AutoSave switch can then be turned on, and its saves arrive as `wordcraft:save`. |
+| `wordcraft:confirm-saves` | page → app | `value: true`: from now on each Save carries an `id`, and the document counts as saved only once you answer `wordcraft:saved { id }`. |
+| `wordcraft:save-failed` | page → app | `id`, `message?`: that save was not stored. The document keeps its unsaved changes and the message is shown. |
+
 ### Driving it from the page (`window.wordcraft`)
 
 Every WordCraft web build puts `window.wordcraft` on the page, from [`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413), the same shape in every Craft app. `wordcraft.request(method, params)` calls any method of the control channel the desktop app serves (`docs/control-protocol.md`), and `execute(command, params)`, `commands()`, `docInspect(params)`, `uiInspect(params)` and `screenshot(params)` are shortcuts for the common ones. Each returns a Promise that resolves with the method's result and rejects with an `Error`; a call the app does not answer within 30 seconds rejects. WordCraft's control requests cannot be withdrawn, so a call that times out in the page still runs when the app reaches it, as it does for a desktop client.

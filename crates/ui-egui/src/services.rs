@@ -1,5 +1,5 @@
 use super::state::DefaultApp;
-use super::{FileDialogAnswer, FileDialogRequest, WordApp, async_saves, paste_picture, printing};
+use super::{FileDialogAnswer, FileDialogRequest, WordApp, async_saves, host_places, paste_picture, printing};
 
 /// Platform services injected by the host (file dialogs, file I/O).
 #[derive(Default)]
@@ -45,6 +45,18 @@ pub struct Services {
     /// under its own name and format, as on the desktop, and a Save or Save As that keeps
     /// everything makes that name the document's file, so the next Save goes to it.
     pub host_save: Option<HostSaveFn>,
+    /// Web, hosted: the places the host page keeps documents in ([`host_places`]). Backstage
+    /// Open and Save As list them, File › Info and Recent show where a document from one lives.
+    pub host_places: Option<host_places::HostPlaces>,
+    /// Web, hosted: ask the host to open a document from one of its places (`wordcraft:open-request`):
+    /// `(place, key)`, the key naming a document the host said lived there (a Recent entry), or
+    /// none for the host to ask which. The document comes back as any host file does, through
+    /// `inbox`. An error means the host wasn't asked.
+    pub host_open: Option<Box<dyn Fn(&str, Option<&str>) -> Result<(), String>>>,
+    /// Web, hosted: whether the host writes Save back in place (a file the browser keeps a handle
+    /// to, a repository), so AutoSave can cover its documents. Without the hook, or while it says
+    /// false, the web app's AutoSave stays off as before ([`crate::AutoSaveBlock::Browser`]).
+    pub host_rewrites: Option<Box<dyn Fn() -> bool>>,
     /// Web: told whether the document has unsaved changes after each pass, for the browser's
     /// leave-page guard (`beforeunload` runs between frames and can't ask the app).
     pub on_dirty: Option<Box<dyn Fn(bool)>>,

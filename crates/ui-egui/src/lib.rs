@@ -46,6 +46,7 @@ pub mod file_dialogs;
 pub mod format_shape;
 pub mod frame;
 pub mod guides;
+pub mod host_places;
 pub mod i18n;
 pub mod ibeam;
 pub mod icons;
@@ -292,6 +293,9 @@ pub struct UiState {
     /// Ribbon › Quick Access Toolbar) brings it back. Kept between runs.
     pub quick_access_toolbar: bool,
     pub recent: Vec<String>,
+    /// Web, hosted: where the Recent entries that came from a host's place live
+    /// ([`host_places`]), by entry, so they reopen through the host.
+    pub recent_places: std::collections::BTreeMap<String, host_places::DocumentPlace>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
     /// Saved choices in Insert > Date & Time: format picture.
@@ -461,6 +465,7 @@ impl Default for UiState {
             ribbon_collapsed: false,
             quick_access_toolbar: true,
             recent: Vec::new(),
+            recent_places: std::collections::BTreeMap::new(),
             recent_symbols: Vec::new(),
             date_time_format: String::new(),
             date_time_language: String::new(),

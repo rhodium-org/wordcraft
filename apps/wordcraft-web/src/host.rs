@@ -26,14 +26,27 @@
 //! - `wordcraft:dirty` whenever unsaved changes appear or go away, `wordcraft:failed` when the
 //!   app couldn't start.
 //!
+//! - Beyond the crate's contract ([`crate::host_ext`]): `wordcraft:places` lists the host's places
+//!   in backstage Open and Save As, choosing one sends `wordcraft:open-request`, and a Save As
+//!   into one carries `place`; `wordcraft:document-place` says where a document lives, for File ›
+//!   Info and Recent; `wordcraft:autosave {available}` lets AutoSave run through a host that
+//!   writes in place; after `wordcraft:confirm-saves {value: true}` each Save carries an `id` and
+//!   counts once the host answers `wordcraft:saved {id}`, while `wordcraft:save-failed {id,
+//!   message}` leaves the document unsaved and shows why.
+//!
 //! In both host modes the host sends the document to edit, so no sample opens, saves are handed
 //! to the host rather than downloaded, the host guards leaving the page, and `?author=` names the
 //! user for comments and tracked changes.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use craft_web_host::web::{FileData, Host, Message};
+use wordcraft_ui_egui::async_saves::{AsyncSaves, SaveOutcome};
+use wordcraft_ui_egui::host_places::{self, HostPlaces};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
+
+use crate::host_ext::Ext;
 
 /// The app id in the host messages (`wordcraft:ready`).
 const APP: &str = "wordcraft";
@@ -50,6 +63,7 @@ const MAX_AUTHOR_CHARS: usize = 200;
 #[derive(Clone)]
 pub struct Bridge {
     host: Rc<Host>,
+    ext: Ext,
 }
 
 impl Bridge {
@@ -57,20 +71,42 @@ impl Bridge {
     /// `data-host="page"` on the canvas, an unframed `?host=parent` page (it stays the normal app
     /// with downloads), or a parent on another origin.
     pub fn detect(canvas: &web_sys::HtmlCanvasElement) -> Option<Self> {
-        Some(Self { host: Rc::new(Host::connect(APP, canvas)?) })
+        let host = Host::connect(APP, canvas)?;
+        let ext = Ext::new(APP, host.mode(), canvas)?;
+        Some(Self { host: Rc::new(host), ext })
     }
 
     /// Hand saved and exported files to the host instead of downloading them, report unsaved
     /// changes to it, and hear the files it sends.
+    ///
+    /// The host's places, AutoSave and confirmed saves ([`crate::host_ext`]) are filled in too;
+    /// each stays as it was before until the host declares it.
     pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
-        self.listen(inbox, ctx);
+        let saves = AsyncSaves::default();
+        let places = HostPlaces::default();
+        let confirms = Rc::new(Cell::new(false));
+        let rewrites = Rc::new(Cell::new(false));
+        self.listen(inbox, ctx.clone(), saves.clone());
+        self.listen_ext(&places, &saves, &confirms, &rewrites, ctx);
+        let (bridge, tickets, place) = (self.clone(), saves.clone(), places.clone());
+        services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| {
+            // Numbered only for a host that confirms saves: until it answers, the save isn't done.
+            let ticket = confirms.get().then(|| tickets.start());
+            let posted = bridge.post_save(name, bytes, ticket.map(|t| t.to_string()).as_deref(), save_as, place.take_save_place().as_deref());
+            if let (Err(e), Some(ticket)) = (&posted, ticket) {
+                tickets.finish(ticket, SaveOutcome::Failed(e.clone()));
+            }
+            posted
+        }));
+        // Anything else that would download goes to the host too: copies, never waited for.
         let bridge = self.clone();
-        services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| bridge.post_save(name, bytes, save_as)));
-        // Anything else that would download goes to the host too.
-        let bridge = self.clone();
-        services.download = Some(Box::new(move |name: &str, bytes: &[u8]| bridge.post_save(name, bytes, false)));
-        // The browser's save picker is never used, so no save finishes later.
-        services.async_saves = None;
+        services.download = Some(Box::new(move |name: &str, bytes: &[u8]| bridge.post_save(name, bytes, None, false, None)));
+        // The browser's save picker is never used; the saves that finish later are the host's.
+        services.async_saves = Some(saves);
+        services.host_places = Some(places);
+        let ext = self.ext.clone();
+        services.host_open = Some(Box::new(move |place: &str, key: Option<&str>| ext.post_open_request(place, key)));
+        services.host_rewrites = Some(Box::new(move || rewrites.get()));
         // The crate does not repeat a state it already reported.
         let host = self.host.clone();
         services.on_dirty = Some(Box::new(move |dirty: bool| host.post_dirty(dirty)));
@@ -93,17 +129,47 @@ impl Bridge {
         let _ = self.host.post_failed(error, None);
     }
 
-    fn post_save(&self, path: &str, bytes: &[u8], save_as: bool) -> Result<(), String> {
+    fn post_save(&self, path: &str, bytes: &[u8], id: Option<&str>, save_as: bool, place: Option<&str>) -> Result<(), String> {
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
-        self.host.post_save(&name, bytes, None, save_as)
+        self.ext.post_save(&name, bytes, id, save_as, place)
     }
 
-    /// Hear `wordcraft:open` and queue the file like a dropped one.
-    fn listen(&self, inbox: Inbox, ctx: egui::Context) {
-        self.host.listen(move |message| {
-            if let Message::Open { name, data } = message {
-                deliver_open(&inbox, &ctx, &name, &data);
+    /// Hear `wordcraft:open` and queue the file like a dropped one, and `wordcraft:saved` for a
+    /// numbered save.
+    fn listen(&self, inbox: Inbox, ctx: egui::Context, saves: AsyncSaves) {
+        self.host.listen(move |message| match message {
+            Message::Open { name, data } => deliver_open(&inbox, &ctx, &name, &data),
+            Message::Saved { id } => {
+                if let Ok(ticket) = id.parse::<u64>() {
+                    saves.finish(ticket, SaveOutcome::Saved);
+                    ctx.request_repaint();
+                }
             }
+            _ => {}
+        });
+    }
+
+    /// Hear the extension messages ([`crate::host_ext`]).
+    fn listen_ext(&self, places: &HostPlaces, saves: &AsyncSaves, confirms: &Rc<Cell<bool>>, rewrites: &Rc<Cell<bool>>, ctx: egui::Context) {
+        let (places, saves, confirms, rewrites) = (places.clone(), saves.clone(), confirms.clone(), rewrites.clone());
+        self.ext.listen(move |kind, message| {
+            match kind {
+                "places" => places.set(host_places::places_from(&message)),
+                "document-place" => {
+                    if let Some(place) = host_places::document_place_from(&message) {
+                        places.arrived(place);
+                    }
+                }
+                "autosave" => rewrites.set(host_places::flag(&message, "available")),
+                "confirm-saves" => confirms.set(host_places::flag(&message, "value")),
+                "save-failed" => {
+                    if let Some((ticket, outcome)) = host_places::save_failed_from(&message) {
+                        saves.finish(ticket, outcome);
+                    }
+                }
+                _ => return,
+            }
+            ctx.request_repaint();
         });
     }
 }

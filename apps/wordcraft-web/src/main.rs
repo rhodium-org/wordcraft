@@ -25,6 +25,8 @@ mod api;
 #[cfg(target_arch = "wasm32")]
 mod host;
 #[cfg(target_arch = "wasm32")]
+mod host_ext;
+#[cfg(target_arch = "wasm32")]
 mod web;
 
 #[cfg(target_arch = "wasm32")]

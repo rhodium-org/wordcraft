@@ -660,7 +660,10 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         );
         let side = crate::rtl::lead_center(rtl);
         ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 13.0), side, crate::i18n::isolate(name), medium(13.0), t.text);
-        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 29.0), side, crate::i18n::isolate_path(p), regular(11.0), t.text_dim);
+        // A document from a host page's place shows where it lives there.
+        let place = app.ui.recent_places.get(p).map(|d| d.label.clone());
+        let second = place.unwrap_or_else(|| crate::i18n::isolate_path(p));
+        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 29.0), side, second, regular(11.0), t.text_dim);
         let xr = Rect::from_min_max(pos2(r.max.x + 2.0, r.min.y + 4.0), pos2(r.max.x + REMOVE_W, r.max.y - 4.0));
         // Right-to-left: the × sits on the left, past the row's trailing edge.
         let xr = if rtl { xr.translate(vec2(-(r.width() + REMOVE_W + 2.0), 0.0)) } else { xr };
@@ -721,7 +724,14 @@ pub(crate) fn forget_save_as_error(ctx: &egui::Context) {
 
 /// Open a file from the Recent list. A file that can't be opened (deleted, moved, unreadable)
 /// leaves File open so the list can say why, rather than closing it on a greyed-out window.
+/// A Recent document from a host page's place reopens through the host, which sends it back.
 pub(crate) fn open_recent(app: &mut WordApp, path: &str) -> Result<(), String> {
+    if let Some(place) = app.ui.recent_places.get(path).cloned()
+        && app.services.host_open.is_some()
+    {
+        app.run("ui.hostOpen", json!({"place": place.place, "key": place.key}))?;
+        return Ok(());
+    }
     app.open_file(path, None)?;
     app.ui.backstage = false;
     app.canvas.want_focus = true;
@@ -743,6 +753,7 @@ fn open_page(app: &mut WordApp, ui: &mut Ui) {
     {
         let _ = app.run("ui.fileBrowser", json!({}));
     }
+    host_place_buttons(app, ui, false);
     ui.add_space(18.0);
     open_list(app, ui);
 }
@@ -759,6 +770,7 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
     if ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
         app.save_as_dialog();
     }
+    host_place_buttons(app, ui, true);
     // A Word template in the user templates folder, which File › New lists under Personal (#2852).
     ui.add_space(8.0);
     if ui
@@ -770,8 +782,31 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// Web, hosted: a button for each place the host page offers for Open, or for Save As
+/// (`save_as`), after Browse… ([`crate::host_places`]). The host asks where in it.
+fn host_place_buttons(app: &mut WordApp, ui: &mut Ui, save_as: bool) {
+    let Some(places) = app.services.host_places.as_ref().map(crate::host_places::HostPlaces::list) else { return };
+    for place in places.into_iter().filter(|p| if save_as { p.save_as } else { p.open }) {
+        ui.add_space(8.0);
+        let label = crate::i18n::isolate(&place.label);
+        if ui.button(egui::RichText::new(label).font(medium(14.0))).clicked() {
+            let (id, params) = if save_as { ("ui.hostSaveAs", json!({"place": place.id})) } else { ("ui.hostOpen", json!({"place": place.id})) };
+            let failed = app.run(id, params).err();
+            let at = if save_as { save_as_error_id() } else { open_error_id() };
+            ui.ctx().data_mut(|d| d.insert_temp(at, failed.unwrap_or_default()));
+        }
+    }
+}
+
 fn info_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Info");
+    // Web, hosted: where the document lives in the host page's place, as the host said.
+    let place = app.services.host_places.as_ref().and_then(|p| p.document(app.session.document_id()));
+    if let Some(place) = place {
+        let t = Tokens::get(ui.ctx());
+        ui.label(egui::RichText::new(crate::i18n::isolate(&place.label)).font(regular(13.0)).color(t.text_dim));
+        ui.add_space(8.0);
+    }
     let info = app.session.run("file.info", &json!({})).unwrap_or_default();
     // Properties at the reading start, so at the right in a mirrored interface, Statistics after.
     let (first, second) = if crate::rtl::on() { (1, 0) } else { (0, 1) };

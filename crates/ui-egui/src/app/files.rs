@@ -140,7 +140,12 @@ impl WordApp {
                     }
                 }
                 if let async_saves::SaveOutcome::Failed(error) = &outcome {
-                    let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &save.name), ("error", error)]);
+                    // A host page that keeps the files said why it couldn't store this one.
+                    let msg = if self.services.host_save.is_some() {
+                        i18n::fmt(tl!("Couldn't save {name}: {error}"), &[("name", &save.name), ("error", error)])
+                    } else {
+                        i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &save.name), ("error", error)])
+                    };
                     log::error!("the save picker couldn't save {}: {error}", save.name);
                     self.status(msg);
                 }
@@ -387,8 +392,12 @@ impl WordApp {
     /// Why AutoSave can't cover the document, or `None` when it can: it writes only a file the
     /// user saved to in this session, in a format that keeps everything, and never in the browser
     /// (a page can't write to the user's files; saving there is a download, #176).
+    ///
+    /// A host page that writes Save back in place ([`Services::host_rewrites`]) lifts the browser
+    /// block: its documents are written where they came from, so one it sent counts as saved there.
     pub fn autosave_block(&self) -> Option<AutoSaveBlock> {
-        if self.services.download.is_some() {
+        let host_rewrites = self.host_rewrites();
+        if self.services.download.is_some() && !host_rewrites {
             return Some(AutoSaveBlock::Browser);
         }
         let Some(path) = &self.session.path else { return Some(AutoSaveBlock::Unsaved) };
@@ -396,10 +405,15 @@ impl WordApp {
             let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             return Some(AutoSaveBlock::Format { name });
         }
-        if !self.saved_here() {
+        if !host_rewrites && !self.saved_here() {
             return Some(AutoSaveBlock::NotSavedHere);
         }
         None
+    }
+
+    /// Web, hosted: whether the host page says it writes Save back in place ([`Services::host_rewrites`]).
+    pub(crate) fn host_rewrites(&self) -> bool {
+        self.services.download.is_some() && self.services.host_save.is_some() && self.services.host_rewrites.as_ref().is_some_and(|f| f())
     }
 
     /// Whether AutoSave covers the document: it is on and nothing blocks it ([`Self::autosave_block`]).
@@ -424,12 +438,47 @@ impl WordApp {
     /// shown in the status bar and turns AutoSave off for the file until the user saves it again.
     pub(crate) fn autosave_tick(&mut self, now: f64) {
         if self.autosaves() && self.session.dirty && now - self.last_autosave > 2500.0 && now - self.canvas.caret_visible_since > 1500.0 {
+            // A host page's save is still out: the next one waits for it.
+            if self.services.download.is_some() && !self.saves_in_flight.is_empty() {
+                return;
+            }
             self.last_autosave = now;
-            if let Err(e) = self.session.run("file.save", &json!({})) {
+            // On the web a save goes to the host page through the app's own Save, never the
+            // engine's file write, which has no files there.
+            let saved = if self.services.download.is_some() {
+                self.execute("file.save", json!({})).map(|_| ())
+            } else {
+                self.session.run("file.save", &json!({})).map(|_| ()).map_err(|e| e.to_string())
+            };
+            if let Err(e) = saved {
                 log::warn!("AutoSave failed: {e}");
                 self.autosave_path = None;
                 self.status(i18n::fmt(tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."), &[("error", &e.to_string())]));
             }
+        }
+    }
+
+    /// Web, hosted: where the documents the host just opened or saved live
+    /// ([`crate::host_places`]). Called every frame after [`Self::drain_inbox`], so a place the
+    /// host sent right after a file goes to the document that file opened as. The Recent entry
+    /// for it remembers the place, so it reopens through the host.
+    pub(crate) fn settle_host_places(&mut self) {
+        let Some(places) = self.services.host_places.clone() else { return };
+        let arrived = places.take_arrived();
+        let Some(place) = arrived.into_iter().last() else { return };
+        if !self.has_document() {
+            return;
+        }
+        places.set_document(self.session.document_id(), place.clone());
+        if let Some(p) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string()) {
+            if self.ui.recent.first() != Some(&p) {
+                self.ui.recent.retain(|r| *r != p);
+                self.ui.recent.insert(0, p.clone());
+                self.ui.recent.truncate(crate::MAX_RECENT);
+            }
+            self.ui.recent_places.insert(p, place);
+            let recent = &self.ui.recent;
+            self.ui.recent_places.retain(|k, _| recent.contains(k));
         }
     }
 
