@@ -60,9 +60,27 @@ impl WordApp {
     /// still waiting for its answer (the browser's picker, or a host page that confirms saves)
     /// counts as unsaved until it is written: a host guarding the tab keeps guarding it.
     pub(crate) fn report_dirty(&self) {
+        // Which document first: a host keeping state per document puts the change of document
+        // before the new one's unsaved state, which it would otherwise give the old one.
+        self.report_document();
         if let Some(f) = &self.services.on_dirty {
             f(self.session.dirty || panes::has_comment_drafts(self) || self.save_unconfirmed());
         }
+    }
+
+    /// Tell the host which document the window shows ([`Services::on_document`]): File › New,
+    /// Switch Windows, Close and a document opened all change it, and a Save As renames it.
+    pub(crate) fn report_document(&self) {
+        let Some(f) = &self.services.on_document else { return };
+        let name = self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
+        f(&crate::ShownDocument {
+            id: self.session.document_id(),
+            name,
+            title: self.title_stem(),
+            open: self.has_document(),
+            dirty: self.session.dirty || panes::has_comment_drafts(self) || self.save_unconfirmed(),
+            documents: self.session.documents().iter().map(|d| d.id).filter(|id| Some(*id) != self.no_document).collect(),
+        });
     }
 
     /// Draw the File page, the empty-window chrome, or the normal document window.

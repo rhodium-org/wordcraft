@@ -32,7 +32,8 @@
 //!   Info and Recent; `wordcraft:autosave {available}` lets AutoSave run through a host that
 //!   writes in place; after `wordcraft:confirm-saves {value: true}` each Save carries an `id` and
 //!   counts once the host answers `wordcraft:saved {id}`, while `wordcraft:save-failed {id,
-//!   message}` leaves the document unsaved and shows why. A save AutoSave sent carries
+//!   message}` leaves the document unsaved and shows why. `wordcraft:document` says which
+//!   document is shown, whenever that changes. A save AutoSave sent carries
 //!   `auto: true`, so the host can store it without asking anything.
 //!
 //! In both host modes the host sends the document to edit, so no sample opens, saves are handed
@@ -118,6 +119,17 @@ impl Bridge {
         // The crate does not repeat a state it already reported.
         let host = self.host.clone();
         services.on_dirty = Some(Box::new(move |dirty: bool| host.post_dirty(dirty)));
+        // Which document is shown, said again only when it, its file's name or the open ones change.
+        let (ext, said) = (self.ext.clone(), std::cell::RefCell::new(None::<(u64, Option<String>, bool, Vec<u64>)>));
+        services.on_document = Some(Box::new(move |shown: &wordcraft_ui_egui::ShownDocument| {
+            let now = (shown.id, shown.name.clone(), shown.open, shown.documents.clone());
+            if said.borrow().as_ref() == Some(&now) {
+                return;
+            }
+            if ext.post_document(shown).is_ok() {
+                *said.borrow_mut() = Some(now);
+            }
+        }));
     }
 
     /// `?author=`: the host's name for the user signs comments and tracked changes.

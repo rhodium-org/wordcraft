@@ -15,6 +15,8 @@ fn github() -> HostPlace {
 #[derive(Default)]
 struct Seen {
     saves: Vec<(String, bool, Option<String>)>,
+    /// The documents the host was told were shown, each pass.
+    shown: Vec<crate::ShownDocument>,
     /// Whether each save was AutoSave's.
     autos: Vec<bool>,
     opens: Vec<(String, Option<String>)>,
@@ -36,6 +38,7 @@ fn hosted(confirms: bool, rewrites: Rc<std::cell::Cell<bool>>) -> (WordApp, Host
         Ok(())
     });
     let log = seen.clone();
+    let shown_log = seen.clone();
     let services = Services {
         download: Some(Box::new(|_: &str, _: &[u8]| Ok(()))),
         host_save: Some(host_save),
@@ -46,6 +49,7 @@ fn hosted(confirms: bool, rewrites: Rc<std::cell::Cell<bool>>) -> (WordApp, Host
             Ok(())
         })),
         host_rewrites: Some(Box::new(move || rewrites.get())),
+        on_document: Some(Box::new(move |shown: &crate::ShownDocument| shown_log.borrow_mut().shown.push(shown.clone()))),
         ..Default::default()
     };
     (WordApp::new(Session::new(wordcraft_doc::Document::new()), services), places, saves, seen)
@@ -297,4 +301,28 @@ fn the_host_hears_unsaved_until_the_save_is_confirmed() {
     a.settle_async_saves();
     a.report_dirty();
     assert_eq!(heard.get(), Some(true), "typed while the save was out");
+}
+
+/// A host page hears which document the window shows: a new one, and the first again after
+/// Switch Windows, so its own controls follow the document the person is working on.
+#[test]
+fn the_host_hears_which_document_is_shown() {
+    let (mut a, _, _, seen) = hosted(true, Rc::new(std::cell::Cell::new(true)));
+    a.session.path = Some("Report.docx".into());
+    a.report_document();
+    let first = seen.borrow().shown.last().cloned().expect("told at once");
+    assert_eq!(first.name.as_deref(), Some("Report.docx"));
+
+    a.run("file.new", json!({})).unwrap();
+    a.report_document();
+    let new = seen.borrow().shown.last().cloned().expect("told of the new document");
+    assert_ne!(new.id, first.id, "a new document is another one");
+    assert_eq!(new.name, None, "it has no file yet");
+    assert!(new.open && !new.title.is_empty(), "{new:?}");
+
+    a.run("view.switchWindows", json!({"id": first.id})).unwrap();
+    a.report_document();
+    let back = seen.borrow().shown.last().cloned().expect("told of the switch");
+    assert_eq!((back.id, back.name.as_deref()), (first.id, Some("Report.docx")));
+    assert!(back.documents.contains(&first.id) && back.documents.contains(&new.id), "both are open: {back:?}");
 }

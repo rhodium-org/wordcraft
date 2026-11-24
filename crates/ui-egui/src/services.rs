@@ -60,6 +60,10 @@ pub struct Services {
     /// Web: told whether the document has unsaved changes after each pass, for the browser's
     /// leave-page guard (`beforeunload` runs between frames and can't ask the app).
     pub on_dirty: Option<Box<dyn Fn(bool)>>,
+    /// Web, hosted: told which document the window shows after each pass ([`ShownDocument`]),
+    /// so a host page that keeps documents for the app knows which one its controls are about.
+    /// Called every frame; the host repeats nothing it already said.
+    pub on_document: Option<Box<dyn Fn(&ShownDocument)>>,
     /// Web: hand PDF bytes to the browser's print dialog (no download or intermediate file).
     /// Desktop uses `print_native` instead. An error means nothing was opened.
     pub print: Option<Box<dyn Fn(&[u8]) -> Result<(), String>>>,
@@ -123,3 +127,21 @@ pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 /// [`Services::host_save`]: `(file name, bytes, save_as)`. An error means the page didn't get
 /// the file, and the save failed.
 pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool) -> Result<(), String>>;
+
+/// The document a window shows, for a host page ([`Services::on_document`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShownDocument {
+    /// The session's id for it ([`wordcraft_engine::Session::document_id`]): the same while it is open.
+    pub id: u64,
+    /// Its file's name, as the host sent it or a Save As named it; `None` for a document with no
+    /// file yet (File › New, a template).
+    pub name: Option<String>,
+    /// What the title bar calls it (`Document1` for an untitled one).
+    pub title: String,
+    /// `false` for the Start screen's placeholder: no document is open.
+    pub open: bool,
+    /// Unsaved changes, or a save still waiting for its answer.
+    pub dirty: bool,
+    /// Every open document's id, this one included: one the host kept that is gone was closed.
+    pub documents: Vec<u64>,
+}

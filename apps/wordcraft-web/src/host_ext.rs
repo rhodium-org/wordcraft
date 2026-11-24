@@ -12,6 +12,7 @@
 //! | `autosave` | host → app | `available`: the host writes Save back in place, so AutoSave may run |
 //! | `confirm-saves` | host → app | `value`: from now on each Save carries an `id` and counts once the host answers |
 //! | `save` | app → host | the crate's fields, `place?` (a Save As into one of the host's places) and `auto?` (AutoSave sent it) |
+//! | `document` | app → host | `id`, `name?`, `title`, `open`, `dirty`, `documents` (every open one's id): the document shown, sent when it, its file's name or the open documents change |
 //! | `save-failed` | host → app | `id`, `message?`: the save was not stored; the document stays unsaved |
 //!
 //! The crate's `saved {id}` confirms a save. A host that never sends `confirm-saves` sees saves
@@ -108,6 +109,21 @@ impl Ext {
             fields.push(("auto", true.into()));
         }
         self.post("save", &fields, Some(&buffer))
+    }
+
+    /// `document`: the document the window shows now ([`wordcraft_ui_egui::ShownDocument`]).
+    pub fn post_document(&self, shown: &wordcraft_ui_egui::ShownDocument) -> Result<(), String> {
+        let mut fields = vec![
+            ("id", JsValue::from(shown.id.to_string())),
+            ("title", JsValue::from(shown.title.as_str())),
+            ("open", shown.open.into()),
+            ("dirty", shown.dirty.into()),
+            ("documents", shown.documents.iter().map(|id| JsValue::from(id.to_string())).collect::<js_sys::Array>().into()),
+        ];
+        if let Some(name) = &shown.name {
+            fields.push(("name", name.as_str().into()));
+        }
+        self.post("document", &fields, None)
     }
 
     /// `open-request`: ask the host for a document from `place` (`key`: one it said lived there).
