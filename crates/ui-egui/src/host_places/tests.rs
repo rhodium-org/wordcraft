@@ -263,3 +263,29 @@ fn a_host_file_without_a_place_forgets_the_old_one() {
     a.settle_host_places();
     assert_eq!(a.ui.recent_places.get("Report.docx"), Some(&place));
 }
+
+/// While a save waits for the host's answer the host is told the document is unsaved, so it
+/// keeps guarding the tab; the answer clears it, and an edit made meanwhile keeps it.
+#[test]
+fn the_host_hears_unsaved_until_the_save_is_confirmed() {
+    let (mut a, _, saves, _) = hosted(true, Rc::default());
+    let heard = Rc::new(std::cell::Cell::new(None));
+    let h = heard.clone();
+    a.services.on_dirty = Some(Box::new(move |d: bool| h.set(Some(d))));
+    a.session.path = Some("Report.docx".into());
+    a.run("text.insert", json!({"text": "Hello"})).unwrap();
+    let ticket = a.run("file.save", json!({})).unwrap()["pendingSave"].as_u64().unwrap();
+    a.report_dirty();
+    assert_eq!(heard.get(), Some(true), "handed over, not yet written");
+    saves.finish(ticket, SaveOutcome::Saved);
+    a.settle_async_saves();
+    a.report_dirty();
+    assert_eq!(heard.get(), Some(false));
+
+    let ticket = a.run("text.insert", json!({"text": "!"})).and_then(|_| a.run("file.save", json!({}))).unwrap()["pendingSave"].as_u64().unwrap();
+    a.run("text.insert", json!({"text": " more"})).unwrap();
+    saves.finish(ticket, SaveOutcome::Saved);
+    a.settle_async_saves();
+    a.report_dirty();
+    assert_eq!(heard.get(), Some(true), "typed while the save was out");
+}

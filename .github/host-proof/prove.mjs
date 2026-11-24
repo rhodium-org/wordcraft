@@ -139,6 +139,8 @@ try {
   const id1 = saves[0]?.id;
   check('after confirm-saves a save carries an id and is pending', typeof id1 === 'string' && r.ok?.pendingSave !== undefined, { r, saves });
 
+  const heardClean = (await since(t)).some((e) => e.kind === 'dirty' && e.dirty === false);
+  check('while a save waits for its answer the host never hears the document is clean', !heardClean, await since(t));
   const pendingClose = await run('file.close');
   check('a save the host has not confirmed still counts as unsaved (Close is refused)', pendingClose.err !== undefined, pendingClose);
   t = await now();
@@ -154,8 +156,10 @@ try {
   await pause(300);
   const id2 = (await since(t)).find((e) => e.kind === 'save')?.id;
   const before = await run('file.close');
+  t = await now();
   await send('saved', { id: id2 });
   await pause(800);
+  check('wordcraft:saved {id} tells the host the document is clean', (await since(t)).some((e) => e.kind === 'dirty' && e.dirty === false), await since(t));
   check('wordcraft:saved {id} confirms it: refused before the answer, closes after', typeof id2 === 'string' && id2 !== id1 && before.err !== undefined, { id2, before });
 
   await run('text.insert', { text: 'To another place. ' });

@@ -56,10 +56,12 @@ impl WordApp {
         if title.is_empty() { tl!("Document1").into() } else { title }
     }
 
-    /// Tell the host whether the document has unsaved changes ([`Services::on_dirty`]).
-    pub(super) fn report_dirty(&self) {
+    /// Tell the host whether the document has unsaved changes ([`Services::on_dirty`]). A save
+    /// still waiting for its answer (the browser's picker, or a host page that confirms saves)
+    /// counts as unsaved until it is written: a host guarding the tab keeps guarding it.
+    pub(crate) fn report_dirty(&self) {
         if let Some(f) = &self.services.on_dirty {
-            f(self.session.dirty || panes::has_comment_drafts(self));
+            f(self.session.dirty || panes::has_comment_drafts(self) || self.save_unconfirmed());
         }
     }
 
