@@ -60,6 +60,8 @@ struct State {
     documents: BTreeMap<u64, DocumentPlace>,
     /// The place the next save goes to (a Save As from backstage), taken once by the bridge.
     save_place: Option<String>,
+    /// The next save is AutoSave's, not one the user asked for; taken once by the bridge.
+    auto_save: bool,
 }
 
 /// The host's places and where its documents live, shared between the bridge and the app (a cheap
@@ -99,6 +101,17 @@ impl HostPlaces {
     /// Where the document lives, if the host said.
     pub fn document(&self, document: u64) -> Option<DocumentPlace> {
         self.0.borrow().documents.get(&document).cloned()
+    }
+
+    /// AutoSave is about to save (`true`), or has finished trying (`false`).
+    pub(crate) fn set_auto_save(&self, auto: bool) {
+        self.0.borrow_mut().auto_save = auto;
+    }
+
+    /// The bridge: whether this save is AutoSave's (claimed once). The host can then store it
+    /// without asking the user anything, as a save they asked for might.
+    pub fn take_auto_save(&self) -> bool {
+        std::mem::take(&mut self.0.borrow_mut().auto_save)
     }
 
     pub(crate) fn set_save_place(&self, place: Option<String>) {

@@ -11,7 +11,7 @@
 //! | `document-place` | host → app | `place`, `key?`, `label?`: where the document just opened or saved lives |
 //! | `autosave` | host → app | `available`: the host writes Save back in place, so AutoSave may run |
 //! | `confirm-saves` | host → app | `value`: from now on each Save carries an `id` and counts once the host answers |
-//! | `save` | app → host | the crate's fields, and `place?` (a Save As into one of the host's places) |
+//! | `save` | app → host | the crate's fields, `place?` (a Save As into one of the host's places) and `auto?` (AutoSave sent it) |
 //! | `save-failed` | host → app | `id`, `message?`: the save was not stored; the document stays unsaved |
 //!
 //! The crate's `saved {id}` confirms a save. A host that never sends `confirm-saves` sees saves
@@ -92,9 +92,9 @@ impl Ext {
         }
     }
 
-    /// `save`: the crate's fields (`name`, `bytes`, `saveAs`, `id?`) and `place?`. The bytes go as
+    /// `save`: the crate's fields (`name`, `bytes`, `saveAs`, `id?`), `place?` and `auto?`. The bytes go as
     /// a transferred `ArrayBuffer`.
-    pub fn post_save(&self, name: &str, bytes: &[u8], id: Option<&str>, save_as: bool, place: Option<&str>) -> Result<(), String> {
+    pub fn post_save(&self, name: &str, bytes: &[u8], id: Option<&str>, save_as: bool, place: Option<&str>, auto: bool) -> Result<(), String> {
         let buffer = js_sys::Uint8Array::from(bytes).buffer();
         let mut fields =
             vec![("name", JsValue::from(file_name(Some(name), "document"))), ("bytes", buffer.clone().into()), ("saveAs", save_as.into())];
@@ -103,6 +103,9 @@ impl Ext {
         }
         if let Some(place) = place {
             fields.push(("place", place.into()));
+        }
+        if auto {
+            fields.push(("auto", true.into()));
         }
         self.post("save", &fields, Some(&buffer))
     }

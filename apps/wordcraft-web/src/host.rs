@@ -32,7 +32,8 @@
 //!   Info and Recent; `wordcraft:autosave {available}` lets AutoSave run through a host that
 //!   writes in place; after `wordcraft:confirm-saves {value: true}` each Save carries an `id` and
 //!   counts once the host answers `wordcraft:saved {id}`, while `wordcraft:save-failed {id,
-//!   message}` leaves the document unsaved and shows why.
+//!   message}` leaves the document unsaved and shows why. A save AutoSave sent carries
+//!   `auto: true`, so the host can store it without asking anything.
 //!
 //! In both host modes the host sends the document to edit, so no sample opens, saves are handed
 //! to the host rather than downloaded, the host guards leaving the page, and `?author=` names the
@@ -92,7 +93,14 @@ impl Bridge {
         services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| {
             // Numbered only for a host that confirms saves: until it answers, the save isn't done.
             let ticket = confirms.get().then(|| tickets.start());
-            let posted = bridge.post_save(name, bytes, ticket.map(|t| t.to_string()).as_deref(), save_as, place.take_save_place().as_deref());
+            let posted = bridge.post_save(
+                name,
+                bytes,
+                ticket.map(|t| t.to_string()).as_deref(),
+                save_as,
+                place.take_save_place().as_deref(),
+                place.take_auto_save(),
+            );
             if let (Err(e), Some(ticket)) = (&posted, ticket) {
                 tickets.finish(ticket, SaveOutcome::Failed(e.clone()));
             }
@@ -100,7 +108,7 @@ impl Bridge {
         }));
         // Anything else that would download goes to the host too: copies, never waited for.
         let bridge = self.clone();
-        services.download = Some(Box::new(move |name: &str, bytes: &[u8]| bridge.post_save(name, bytes, None, false, None)));
+        services.download = Some(Box::new(move |name: &str, bytes: &[u8]| bridge.post_save(name, bytes, None, false, None, false)));
         // The browser's save picker is never used; the saves that finish later are the host's.
         services.async_saves = Some(saves);
         services.host_places = Some(places);
@@ -129,9 +137,9 @@ impl Bridge {
         let _ = self.host.post_failed(error, None);
     }
 
-    fn post_save(&self, path: &str, bytes: &[u8], id: Option<&str>, save_as: bool, place: Option<&str>) -> Result<(), String> {
+    fn post_save(&self, path: &str, bytes: &[u8], id: Option<&str>, save_as: bool, place: Option<&str>, auto: bool) -> Result<(), String> {
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
-        self.ext.post_save(&name, bytes, id, save_as, place)
+        self.ext.post_save(&name, bytes, id, save_as, place, auto)
     }
 
     /// Hear `wordcraft:open` and queue the file like a dropped one, and `wordcraft:saved` for a

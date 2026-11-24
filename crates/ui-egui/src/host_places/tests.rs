@@ -15,6 +15,8 @@ fn github() -> HostPlace {
 #[derive(Default)]
 struct Seen {
     saves: Vec<(String, bool, Option<String>)>,
+    /// Whether each save was AutoSave's.
+    autos: Vec<bool>,
     opens: Vec<(String, Option<String>)>,
 }
 
@@ -30,6 +32,7 @@ fn hosted(confirms: bool, rewrites: Rc<std::cell::Cell<bool>>) -> (WordApp, Host
             s.start();
         }
         log.borrow_mut().saves.push((name.to_string(), save_as, p.take_save_place()));
+        log.borrow_mut().autos.push(p.take_auto_save());
         Ok(())
     });
     let log = seen.clone();
@@ -159,7 +162,7 @@ fn autosave_follows_whether_the_host_writes_in_place() {
     assert_eq!(plain.autosave_block(), Some(AutoSaveBlock::Browser));
 
     let rewrites = Rc::new(std::cell::Cell::new(false));
-    let (mut a, _, _, seen) = hosted(false, rewrites.clone());
+    let (mut a, places, _, seen) = hosted(false, rewrites.clone());
     a.session.path = Some("Report.docx".into());
     assert_eq!(a.autosave_block(), Some(AutoSaveBlock::Browser));
     assert!(a.run("file.autosave", json!({"value": true})).is_err());
@@ -176,6 +179,12 @@ fn autosave_follows_whether_the_host_writes_in_place() {
     a.autosave_tick(crate::now_ms() + 60_000.0);
     assert_eq!(seen.borrow().saves.iter().map(|s| s.0.as_str()).collect::<Vec<_>>(), ["Report.docx"]);
     assert!(!a.session.dirty);
+    assert_eq!(seen.borrow().autos, [true], "the host hears that AutoSave sent it");
+
+    a.run("text.insert", json!({"text": " again"})).unwrap();
+    a.run("file.save", json!({})).unwrap();
+    assert_eq!(seen.borrow().autos, [true, false], "a Save the user asked for is not marked");
+    assert!(!places.take_auto_save(), "nothing is left marked for a later save");
 
     rewrites.set(false);
     assert!(!a.autosaves(), "the host can take it back");

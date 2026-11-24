@@ -452,7 +452,15 @@ impl WordApp {
             // On the web a save goes to the host page through the app's own Save, never the
             // engine's file write, which has no files there.
             let saved = if self.services.download.is_some() {
-                self.execute("file.save", json!({})).map(|_| ())
+                // A host page hears that this save is AutoSave's (`wordcraft:save` with `auto`).
+                if let Some(places) = &self.services.host_places {
+                    places.set_auto_save(true);
+                }
+                let saved = self.execute("file.save", json!({})).map(|_| ());
+                if let Some(places) = &self.services.host_places {
+                    places.set_auto_save(false);
+                }
+                saved
             } else {
                 self.session.run("file.save", &json!({})).map(|_| ()).map_err(|e| e.to_string())
             };
