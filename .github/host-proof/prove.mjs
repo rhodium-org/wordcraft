@@ -90,8 +90,11 @@ try {
   const listed = (await run('ui.hostPlaces')).ok;
   check('wordcraft:places is listed (the entry offering neither is dropped)', listed?.places?.map((p) => p.id).join() === 'github,inbox', listed);
 
-  await run('ui.backstage', { value: true, page: 'open' });
+  await run('ui.backstage', { value: false });
+  await run('ui.openFileDialog');
   await pause(800);
+  const owned = await page.evaluate(() => ({ rfdInput: document.getElementById('rfd-input') !== null }));
+  check('a host with open places owns Open: no browser picker is asked for', !owned.rfdInput, owned);
   await page.screenshot({ path: join(OUT, '1-backstage-open-places.png') });
   await run('ui.backstage', { value: false });
 

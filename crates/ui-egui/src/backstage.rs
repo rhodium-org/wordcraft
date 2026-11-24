@@ -740,7 +740,8 @@ pub(crate) fn open_recent(app: &mut WordApp, path: &str) -> Result<(), String> {
 
 fn open_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Open");
-    if ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
+    // A host page that offers places to open from owns opening: its places replace Browse….
+    if !app.host_owns("open") && ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
         let _ = app.run("ui.openFileDialog", json!({}));
     }
     // Linux and the BSDs (#576): the system dialog needs a file chooser portal or zenity; when it
@@ -767,7 +768,7 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
         ui.label(egui::RichText::new(&error).color(ui.visuals().error_fg_color));
         ui.add_space(6.0);
     }
-    if ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
+    if !app.host_owns("saveAs") && ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
         app.save_as_dialog();
     }
     host_place_buttons(app, ui, true);

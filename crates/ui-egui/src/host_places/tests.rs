@@ -215,3 +215,51 @@ fn a_save_failed_message_names_a_numbered_save() {
     assert!(flag(&json!({"available": true}), "available"));
     assert!(!flag(&json!({"available": "yes"}), "available") && !flag(&json!(null), "available"));
 }
+
+/// A host that declares places to open from owns opening: WordCraft's Open (Ctrl+O, File ›
+/// Open's Browse…) shows its places instead of the browser's picker, so no document arrives
+/// behind the host's back. A host with no such place leaves the picker as it was.
+#[test]
+fn a_host_with_open_places_owns_opening() {
+    let picked = Rc::new(std::cell::Cell::new(0));
+    let (mut a, places, _, _) = hosted(false, Rc::default());
+    let count = picked.clone();
+    a.services.open_async = Some(Box::new(move |_: &str| count.set(count.get() + 1)));
+
+    a.run("ui.openFileDialog", json!({})).unwrap();
+    assert_eq!(picked.get(), 1, "no places: the browser's picker");
+
+    places.set(vec![HostPlace { id: "computer".into(), label: "This computer".into(), icon: None, open: true, save_as: true }, github()]);
+    a.ui.backstage = false;
+    a.run("ui.openFileDialog", json!({})).unwrap();
+    assert_eq!(picked.get(), 1, "the picker is not used");
+    assert!(a.ui.backstage && a.ui.backstage_page == "open", "Open shows the host's places");
+    assert!(a.host_owns("open") && a.host_owns("saveAs"));
+
+    places.set(vec![HostPlace { id: "drop".into(), label: "Drop box".into(), icon: None, open: false, save_as: true }]);
+    assert!(!a.host_owns("open") && a.host_owns("saveAs"));
+}
+
+/// A document the host sends without saying where it lives forgets the place its name had, so
+/// its Recent entry opens it as a plain file rather than from the wrong place.
+#[test]
+fn a_host_file_without_a_place_forgets_the_old_one() {
+    let (mut a, places, _, _) = hosted(false, Rc::default());
+    places.set(vec![github()]);
+    let place = DocumentPlace { place: "github".into(), key: "k".into(), label: "l".into() };
+    a.ui.recent_places.insert("Report.docx".into(), place.clone());
+    let inbox: crate::Inbox = Default::default();
+    a.services.inbox = Some(inbox.clone());
+    let doc = wordcraft_engine::io::save_bytes_with("Report.docx", &wordcraft_doc::Document::new(), None, &Default::default()).unwrap();
+    inbox.lock().unwrap().push(("Report.docx".into(), doc.clone()));
+    a.drain_inbox();
+    a.settle_host_places();
+    assert!(!a.ui.recent_places.contains_key("Report.docx"));
+
+    // Sent with its place, it keeps one.
+    inbox.lock().unwrap().push(("Report.docx".into(), doc));
+    places.arrived(place.clone());
+    a.drain_inbox();
+    a.settle_host_places();
+    assert_eq!(a.ui.recent_places.get("Report.docx"), Some(&place));
+}

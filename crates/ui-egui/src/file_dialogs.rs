@@ -447,6 +447,13 @@ impl WordApp {
     }
 
     pub(crate) fn open_dialog(&mut self) {
+        // A host page that declared places to open from owns opening: Open shows them (backstage
+        // Open) instead of the browser's picker, so every document arrives through the host.
+        if self.host_owns("open") {
+            self.ui.backstage = true;
+            self.ui.backstage_page = "open".into();
+            return;
+        }
         if let Some(f) = &self.services.open_async {
             f("document");
             return;

@@ -416,6 +416,12 @@ impl WordApp {
         self.services.download.is_some() && self.services.host_save.is_some() && self.services.host_rewrites.as_ref().is_some_and(|f| f())
     }
 
+    /// Web, hosted: whether the host page declared a place for `what` (`open` or `saveAs`). It
+    /// then owns that: WordCraft's own Browse… gives way to its places ([`crate::host_places`]).
+    pub(crate) fn host_owns(&self, what: &str) -> bool {
+        self.services.host_places.as_ref().is_some_and(|p| p.list().iter().any(|place| if what == "open" { place.open } else { place.save_as }))
+    }
+
     /// Whether AutoSave covers the document: it is on and nothing blocks it ([`Self::autosave_block`]).
     pub fn autosaves(&self) -> bool {
         self.autosave && self.autosave_block().is_none()
@@ -508,6 +514,12 @@ impl WordApp {
                 placed_picture = Self::placed_in_text(&r);
                 r
             } else {
+                // A document the host sent lives where the host says next (`document-place`, read
+                // after this in the same frame); until then it is no longer the place its name
+                // was last seen in.
+                if self.services.host_places.is_some() {
+                    self.ui.recent_places.remove(&name);
+                }
                 self.run("file.open", json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}))
             };
             if r.is_ok() {
