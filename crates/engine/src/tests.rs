@@ -13126,3 +13126,20 @@ fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragra
         assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
     }
 }
+
+/// Compare and Combine take the revised document as bytes (`data`, base64, with `path` naming
+/// it), for a host page that has no files to name: the differences come back as tracked changes.
+#[test]
+fn combine_takes_the_revised_document_as_bytes() {
+    let revised = Session::new(wordcraft_doc::Document::from_text("Their version of the text."));
+    let bytes = crate::io::save_bytes("Theirs.docx", &revised.doc).unwrap();
+    let data = crate::cmd::insert::base64_encode(&bytes);
+    let mut s = Session::new(wordcraft_doc::Document::from_text("My version of the text."));
+    let before = s.doc.revisions.len();
+    s.run("review.combine", &json!({"path": "Theirs.docx", "data": data})).unwrap();
+    assert!(s.doc.revisions.len() > before, "the differences are tracked");
+    assert!(s.doc.plain_text(StoryRef::Body).contains("Their"), "their words are in the result: {}", s.doc.plain_text(StoryRef::Body));
+
+    let bad = s.run("review.compare", &json!({"path": "Theirs.docx", "data": "not base64 at all!"}));
+    assert!(bad.is_err(), "bad bytes are an error, not a panic");
+}

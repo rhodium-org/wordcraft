@@ -5,7 +5,7 @@ use super::{
 use wordcraft_doc::para::OBJ;
 
 /// Compare and Combine take the same settings.
-pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character" (character: paragraphs over 2000 characters fall back to word; see characterFallback/notHonoured), "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared)}"#;
+pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "data"?: base64 (the revised document's bytes; `path` then only names it), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character" (character: paragraphs over 2000 characters fall back to word; see characterFallback/notHonoured), "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared)}"#;
 
 /// What Compare / Combine compares (the More >> settings of Word's dialog).
 struct CompareOptions {
@@ -50,10 +50,14 @@ const MAX_CHAR_DIFF: usize = 2000;
 pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let revised = if let Some(t) = p::str(v, "text") {
         Document::from_text(t)
+    } else if let (Some(path), Some(data)) = (p::str(v, "path"), p::str(v, "data")) {
+        // A host page has no files to name: it hands over the bytes, as `file.open` takes them.
+        let bytes = super::super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64 in `data`".into()))?;
+        crate::io::open_bytes(path, &bytes).map_err(CmdError::Failed)?
     } else if let Some(path) = p::str(v, "path") {
         crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?
     } else {
-        return Err(CmdError::Params("`path` or `text` of the revised document is required".into()));
+        return Err(CmdError::Params("`path` (with `data` for its bytes) or `text` of the revised document is required".into()));
     };
     let show_in = p::str(v, "showIn").unwrap_or("original");
     if !matches!(show_in, "original" | "revised" | "new") {
