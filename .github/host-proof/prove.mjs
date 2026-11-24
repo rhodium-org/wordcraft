@@ -28,11 +28,13 @@ if (!index.includes('<canvas id="wordcraft_canvas"></canvas>')) throw new Error(
 await writeFile(join(SITE, 'host.html'), index.replace('<canvas id="wordcraft_canvas"></canvas>', '<canvas id="wordcraft_canvas" data-host="page"></canvas>').replace('</body>', LOG + '</body>'));
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.css': 'text/css' };
 const WORDS = 'Report paragraph from GitHub';
-const docx = zipSync({
+const docxOf = (words) => zipSync({
   '[Content_Types].xml': strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
   '_rels/.rels': strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
-  'word/document.xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${WORDS}</w:t></w:r></w:p></w:body></w:document>`),
+  'word/document.xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${words}</w:t></w:r></w:p></w:body></w:document>`),
 });
+const docx = docxOf(WORDS);
+const THEIRS = 'Their paragraph, committed meanwhile';
 
 const server = createServer(async (req, res) => {
   const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
@@ -140,6 +142,7 @@ try {
   await pause(300);
   let saves = (await since(t)).filter((e) => e.kind === 'save');
   check('before confirm-saves a save carries no id (unchanged behaviour)', r.ok && saves.length === 1 && saves[0].id === undefined, { r, saves });
+  check('a Save the user asked for carries no auto', saves.length === 1 && saves[0].auto === undefined, saves);
 
   await send('confirm-saves', { value: true });
   await run('text.insert', { text: 'Again. ' });
@@ -226,11 +229,20 @@ try {
   await pause(6000);
   saves = (await since(t)).filter((e) => e.kind === 'save');
   check('AutoSave writes through the host on its own (no Save pressed)', saves.length >= 1 && saves[0].name === 'Report.docx' && typeof saves[0].id === 'string', saves);
+  check('a save AutoSave sent carries auto: true', saves.length >= 1 && saves.every((s) => s.auto === true), saves);
   for (const s of saves) await send('saved', { id: s.id });
   await send('autosave', { available: false });
   await pause(300);
   const off = await run('file.autosave', { value: true });
   check('the host can take AutoSave back', off.err !== undefined, off);
+
+  // ── Combine from the host's bytes ────────────────────────────────────────────────────
+  const data = Buffer.from(docxOf(THEIRS)).toString('base64');
+  const combined = await run('review.combine', { path: 'Report.docx', data, author: 'colleague' });
+  check('review.combine takes the other document as data (no file path on the web)', combined.ok !== undefined, combined);
+  await shows(THEIRS);
+  const junk = await run('review.combine', { path: 'Report.docx', data: 'not base64!' });
+  check('bad data is refused with an error', junk.err !== undefined, junk);
 } finally {
   await writeFile(join(OUT, 'results.json'), JSON.stringify(results, null, 1));
   await browser.close();
