@@ -1,0 +1,10 @@
+{
+  "name": "wordcraft-host-proof",
+  "private": true,
+  "type": "module",
+  "description": "Fork only: proves the host extension points in the built web release (host-release.yml).",
+  "dependencies": {
+    "fflate": "0.8.3",
+    "puppeteer-core": "25.18.1"
+  }
+}

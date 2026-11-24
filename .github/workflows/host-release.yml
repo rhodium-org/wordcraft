@@ -1,7 +1,8 @@
 # rhodium-org fork only, never offered upstream: builds the web release zip with the host
 # extension points, in the same shape as upstream's `wordcraft-web-<version>.zip` release asset
 # (packaging/web/package.sh, as craft-common-actions' release.yml web job runs it), and publishes
-# it as a GitHub prerelease. Push a tag `v<upstream version>-host.<n>` (v0.18.1-host.1) on the
+# it as a GitHub prerelease once .github/host-proof has driven every slot in the built wasm.
+# Push a tag `v<upstream version>-host.<n>` (v0.18.1-host.1) on the
 # fork's host branch; the zip is wordcraft-web-<upstream version>-host.<n>.zip, its sha256 beside it.
 name: Host release (web)
 
@@ -87,6 +88,25 @@ jobs:
           [ "$(grep -cE "^wordcraft-web-$VERSION/wordcraft-web-[0-9a-f]+_bg\.wasm$" <<<"$list")" = 1 ] || { echo "::error::expected one _bg.wasm"; exit 1; }
           [ "$(grep -cE "^wordcraft-web-$VERSION/wordcraft-web-[0-9a-f]+\.js$" <<<"$list")" = 1 ] || { echo "::error::expected one glue .js"; exit 1; }
           (cd dist/release && sha256sum "wordcraft-web-$VERSION.zip" >"wordcraft-web-$VERSION.zip.sha256" && cat "wordcraft-web-$VERSION.zip.sha256")
+      # Each slot driven in the built wasm by a page host, in headless Chrome: nothing is
+      # published unless every check passes. The screenshots are kept as the run's evidence.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Prove the host extension points in the built release
+        working-directory: .github/host-proof
+        run: |
+          npm ci --no-audit --no-fund
+          mkdir -p "$RUNNER_TEMP/site" "$RUNNER_TEMP/proof"
+          unzip -q "$GITHUB_WORKSPACE/dist/release/wordcraft-web-$VERSION.zip" -d "$RUNNER_TEMP/site"
+          node prove.mjs "$RUNNER_TEMP/site/wordcraft-web-$VERSION" "$RUNNER_TEMP/proof" "$(command -v google-chrome)"
+      - name: Keep the proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-proof
+          path: ${{ runner.temp }}/proof
+          if-no-files-found: warn
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
